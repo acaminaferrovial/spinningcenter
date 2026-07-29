@@ -49,16 +49,17 @@ export const updateRoute = async (req: AuthRequest, res: Response): Promise<void
   }
   // Whitelist allowed fields to prevent NoSQL injection via req.body
   const { name, totalDuration, playlistId, playlistName, segments } = req.body;
-  const update: Record<string, unknown> = {};
-  if (name !== undefined) update.name = String(name);
-  if (totalDuration !== undefined) update.totalDuration = Number(totalDuration);
-  if (playlistId !== undefined) update.playlistId = playlistId ? String(playlistId) : undefined;
-  if (playlistName !== undefined) update.playlistName = playlistName ? String(playlistName) : undefined;
-  if (segments !== undefined) update.segments = segments;
+  const setFields: Record<string, unknown> = {};
+  if (name !== undefined) setFields.name = String(name);
+  if (totalDuration !== undefined) setFields.totalDuration = Number(totalDuration);
+  if (playlistId !== undefined) setFields.playlistId = playlistId ? String(playlistId) : undefined;
+  if (playlistName !== undefined) setFields.playlistName = playlistName ? String(playlistName) : undefined;
+  if (segments !== undefined) setFields.segments = segments;
 
+  // Use $set explicitly so no top-level query operators can be injected
   const route = await Route.findOneAndUpdate(
     { _id: req.params.id, userId: req.userId },
-    update,
+    { $set: setFields },
     { new: true, runValidators: true }
   );
   if (!route) {
