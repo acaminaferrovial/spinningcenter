@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { authMiddleware } from '../middleware/auth';
+import { apiLimiter } from '../middleware/rateLimiter';
 import {
   getRoutes,
   getRoute,
@@ -10,6 +11,7 @@ import {
 
 const router = Router();
 
+router.use(apiLimiter);
 router.use(authMiddleware);
 
 router.get('/', getRoutes);

@@ -110,6 +110,11 @@ export const getPlaylists = async (req: AuthRequest, res: Response): Promise<voi
 
 export const getPlaylistTracks = async (req: AuthRequest, res: Response): Promise<void> => {
   const { id } = req.params;
+  // Validate playlist ID to prevent SSRF — Spotify IDs are alphanumeric (22 chars)
+  if (!/^[A-Za-z0-9]{1,40}$/.test(id)) {
+    res.status(400).json({ message: 'Invalid playlist ID' });
+    return;
+  }
   const accessToken = await refreshSpotifyToken(req.userId!);
 
   const response = await axios.get(

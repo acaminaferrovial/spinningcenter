@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { authMiddleware } from '../middleware/auth';
+import { apiLimiter } from '../middleware/rateLimiter';
 import {
   getPlaylists,
   getPlaylistTracks,
@@ -8,6 +9,7 @@ import {
 
 const router = Router();
 
+router.use(apiLimiter);
 router.use(authMiddleware);
 
 router.get('/token', getSpotifyToken);
