@@ -1,6 +1,11 @@
 import { Response } from 'express';
+import mongoose from 'mongoose';
 import { AuthRequest } from '../middleware/auth';
 import Route from '../models/Route';
+
+function isValidObjectId(id: string): boolean {
+  return mongoose.Types.ObjectId.isValid(id) && String(new mongoose.Types.ObjectId(id)) === id;
+}
 
 export const getRoutes = async (req: AuthRequest, res: Response): Promise<void> => {
   const routes = await Route.find({ userId: req.userId }).sort({ createdAt: -1 });
@@ -8,6 +13,10 @@ export const getRoutes = async (req: AuthRequest, res: Response): Promise<void> 
 };
 
 export const getRoute = async (req: AuthRequest, res: Response): Promise<void> => {
+  if (!isValidObjectId(req.params.id)) {
+    res.status(404).json({ message: 'Route not found' });
+    return;
+  }
   const route = await Route.findOne({ _id: req.params.id, userId: req.userId });
   if (!route) {
     res.status(404).json({ message: 'Route not found' });
@@ -34,6 +43,10 @@ export const createRoute = async (req: AuthRequest, res: Response): Promise<void
 };
 
 export const updateRoute = async (req: AuthRequest, res: Response): Promise<void> => {
+  if (!isValidObjectId(req.params.id)) {
+    res.status(404).json({ message: 'Route not found' });
+    return;
+  }
   // Whitelist allowed fields to prevent NoSQL injection via req.body
   const { name, totalDuration, playlistId, playlistName, segments } = req.body;
   const update: Record<string, unknown> = {};
@@ -56,6 +69,10 @@ export const updateRoute = async (req: AuthRequest, res: Response): Promise<void
 };
 
 export const deleteRoute = async (req: AuthRequest, res: Response): Promise<void> => {
+  if (!isValidObjectId(req.params.id)) {
+    res.status(404).json({ message: 'Route not found' });
+    return;
+  }
   const route = await Route.findOneAndDelete({ _id: req.params.id, userId: req.userId });
   if (!route) {
     res.status(404).json({ message: 'Route not found' });

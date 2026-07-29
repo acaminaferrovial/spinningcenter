@@ -10,6 +10,6 @@ router.post('/register', authLimiter, register);
 router.post('/login', authLimiter, login);
 router.get('/me', authLimiter, authMiddleware, me);
 router.get('/spotify', authLimiter, authMiddleware, spotifyLoginWithState);
-router.get('/spotify/callback', spotifyCallback);
+router.get('/spotify/callback', authLimiter, spotifyCallback);
 
 export default router;

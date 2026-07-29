@@ -1,9 +1,14 @@
 import { Request, Response } from 'express';
 import axios from 'axios';
+import mongoose from 'mongoose';
 import { AuthRequest } from '../middleware/auth';
 import User from '../models/User';
 import { encrypt } from '../utils/crypto';
 import { refreshSpotifyToken } from '../services/spotifyService';
+
+function isValidObjectId(id: string): boolean {
+  return mongoose.Types.ObjectId.isValid(id) && String(new mongoose.Types.ObjectId(id)) === id;
+}
 
 const SPOTIFY_AUTH_URL = 'https://accounts.spotify.com/authorize';
 const SPOTIFY_TOKEN_URL = 'https://accounts.spotify.com/api/token';
@@ -39,6 +44,12 @@ export const spotifyCallback = async (req: Request & { userId?: string }, res: R
 
   if (!code || !userId) {
     res.status(400).json({ message: 'Missing code or state' });
+    return;
+  }
+
+  // Validate userId is a legitimate MongoDB ObjectId to prevent injection
+  if (!isValidObjectId(userId)) {
+    res.status(400).json({ message: 'Invalid state parameter' });
     return;
   }
 

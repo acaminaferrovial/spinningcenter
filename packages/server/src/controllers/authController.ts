@@ -16,7 +16,7 @@ export const register = async (req: Request, res: Response): Promise<void> => {
     return;
   }
 
-  const existing = await User.findOne({ email });
+  const existing = await User.findOne({ email: String(email) });
   if (existing) {
     res.status(409).json({ message: 'Email already registered' });
     return;
@@ -36,7 +36,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
     return;
   }
 
-  const user = await User.findOne({ email });
+  const user = await User.findOne({ email: String(email) });
   if (!user) {
     res.status(401).json({ message: 'Invalid credentials' });
     return;
