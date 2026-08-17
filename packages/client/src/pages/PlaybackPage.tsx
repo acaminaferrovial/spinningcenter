@@ -2,18 +2,10 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import BestCyclingChart from '../components/BestCyclingChart';
 import api from '../utils/api';
-import { Route, Segment, ZONE_COLORS, ZONE_NAMES } from '../types';
+import { Route, Segment, ZONE_COLORS } from '../types';
 
-// Spotify Web Playback SDK types (minimal)
-declare global {
-  interface Window {
-    Spotify: {
-      Player: new (options: SpotifyPlayerOptions) => SpotifyPlayer;
-    };
-    onSpotifyWebPlaybackSDKReady: () => void;
-  }
-}
-
+// Spotify Web Playback SDK types (minimal) — window.Spotify itself is typed
+// in types/spotify-sdk.d.ts, shared with the designer's preview player
 interface SpotifyPlayerOptions {
   name: string;
   getOAuthToken: (cb: (token: string) => void) => void;
@@ -56,6 +48,28 @@ function getActiveSegment(segments: Segment[], currentTime: number): Segment | n
   return segments.find((s) => currentTime >= s.startTime && currentTime <= s.endTime) || null;
 }
 
+const RECOVERY_METHOD = 'Recuperación';
+
+// Time-to-next-recovery info: if we're inside a recovery segment, how long is
+// left of it; otherwise how long until the next one starts. Handles routes
+// with several recovery breaks.
+function getRecoveryInfo(
+  segments: Segment[],
+  currentTime: number
+): { inRecovery: boolean; seconds: number } | null {
+  const active = segments.find((s) => currentTime >= s.startTime && currentTime <= s.endTime);
+  if (active?.method === RECOVERY_METHOD) {
+    return { inRecovery: true, seconds: active.endTime - currentTime };
+  }
+  const next = segments
+    .filter((s) => s.method === RECOVERY_METHOD && s.startTime > currentTime)
+    .sort((a, b) => a.startTime - b.startTime)[0];
+  if (next) {
+    return { inRecovery: false, seconds: next.startTime - currentTime };
+  }
+  return null;
+}
+
 export default function PlaybackPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -67,11 +81,14 @@ export default function PlaybackPage() {
   const [nowPlaying, setNowPlaying] = useState<{
     name: string; artist: string; image?: string;
   } | null>(null);
+  const [sdkReady, setSdkReady] = useState(false);
+  const [sdkError, setSdkError] = useState('');
 
   const playerRef = useRef<SpotifyPlayer | null>(null);
   const deviceIdRef = useRef<string>('');
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const spotifyPosRef = useRef<number>(0); // ms into playlist
+  const spotifyPosRef = useRef<number>(0); // ms into the current track
+  const lastTrackIdRef = useRef<string | null>(null); // track currently loaded on the device
 
   // Load route
   useEffect(() => {
@@ -82,23 +99,49 @@ export default function PlaybackPage() {
 
   // Init Spotify SDK
   useEffect(() => {
-    let player: SpotifyPlayer;
+    let player: SpotifyPlayer | null = null;
+    let cancelled = false;
 
     const initPlayer = () => {
       api.get('/spotify/token').then(({ data }) => {
-        player = new window.Spotify.Player({
+        if (cancelled) return;
+
+        const p: SpotifyPlayer = new window.Spotify.Player({
           name: 'SpinningCenter',
           getOAuthToken: (cb) => {
             api.get('/spotify/token').then(({ data }) => cb(data.accessToken));
           },
           volume,
         });
+        player = p;
 
-        player.addListener('ready', ({ device_id }: { device_id: string }) => {
+        p.addListener('ready', ({ device_id }: { device_id: string }) => {
           deviceIdRef.current = device_id;
+          setSdkReady(true);
+          setSdkError('');
         });
 
-        player.addListener('player_state_changed', (state: SpotifyPlayerState | null) => {
+        p.addListener('not_ready', () => {
+          setSdkReady(false);
+        });
+
+        p.addListener('initialization_error', ({ message }: { message: string }) => {
+          setSdkError('No se pudo inicializar el reproductor: ' + message);
+        });
+
+        p.addListener('authentication_error', ({ message }: { message: string }) => {
+          setSdkError('Error de autenticación con Spotify: ' + message + '. Prueba a reconectar Spotify.');
+        });
+
+        p.addListener('account_error', ({ message }: { message: string }) => {
+          setSdkError('Esta función requiere Spotify Premium: ' + message);
+        });
+
+        p.addListener('playback_error', ({ message }: { message: string }) => {
+          setSdkError('Error de reproducción: ' + message);
+        });
+
+        p.addListener('player_state_changed', (state: SpotifyPlayerState | null) => {
           if (!state) return;
           setIsPlaying(!state.paused);
           spotifyPosRef.current = state.position;
@@ -110,42 +153,114 @@ export default function PlaybackPage() {
           });
         });
 
-        player.connect();
-        playerRef.current = player;
+        p.connect();
+        playerRef.current = p;
       });
     };
 
     if (window.Spotify) {
       initPlayer();
-    } else {
+    } else if (!document.querySelector('script[src="https://sdk.scdn.co/spotify-player.js"]')) {
       window.onSpotifyWebPlaybackSDKReady = initPlayer;
       const script = document.createElement('script');
       script.src = 'https://sdk.scdn.co/spotify-player.js';
       script.async = true;
       document.body.appendChild(script);
+    } else {
+      window.onSpotifyWebPlaybackSDKReady = initPlayer;
     }
 
     return () => {
-      if (playerRef.current) playerRef.current.disconnect();
+      cancelled = true;
+      if (player) player.disconnect();
+      if (playerRef.current === player) playerRef.current = null;
     };
   }, []);
 
-  // Start playlist on Spotify when user presses play
-  const startSpotifyPlaylist = useCallback(async () => {
-    if (!route?.playlistId || !deviceIdRef.current) return;
-    const { data } = await api.get('/spotify/token');
-    await fetch(
-      'https://api.spotify.com/v1/me/player/play?device_id=' + deviceIdRef.current,
-      {
-        method: 'PUT',
-        headers: {
-          Authorization: 'Bearer ' + data.accessToken,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ context_uri: 'spotify:playlist:' + route.playlistId }),
+  // Ramp the player's volume from `from` to `to` over `durationMs`. Spotify's
+  // SDK doesn't support mixing two tracks (no true crossfade), but fading to
+  // silence and back around a track switch softens the jump considerably.
+  const fadeVolume = useCallback(async (from: number, to: number, durationMs: number) => {
+    if (!playerRef.current) return;
+    const steps = 8;
+    for (let i = 1; i <= steps; i++) {
+      const v = from + (to - from) * (i / steps);
+      await playerRef.current.setVolume(Math.max(0, Math.min(1, v)));
+      await new Promise((resolve) => setTimeout(resolve, durationMs / steps));
+    }
+  }, []);
+
+  // Play the song assigned to a segment, looping it so it covers however long
+  // that segment/region lasts — this is the core of "one song per drawn tramo".
+  // When `fade` is true (automatic zone→zone transitions during playback), the
+  // volume dips to 0 and back up around the switch instead of cutting sharply.
+  const playSegmentTrack = useCallback(
+    async (segment: Segment, opts: { fade?: boolean } = {}) => {
+      if (!segment.trackId || !deviceIdRef.current) return;
+      const shouldFade = !!opts.fade && lastTrackIdRef.current !== null;
+
+      try {
+        if (shouldFade) await fadeVolume(volume, 0, 450);
+
+        const { data } = await api.get('/spotify/token');
+
+        // Loop the single track so it keeps playing for the whole segment
+        await fetch(
+          'https://api.spotify.com/v1/me/player/repeat?state=track&device_id=' + deviceIdRef.current,
+          { method: 'PUT', headers: { Authorization: 'Bearer ' + data.accessToken } }
+        );
+
+        const res = await fetch(
+          'https://api.spotify.com/v1/me/player/play?device_id=' + deviceIdRef.current,
+          {
+            method: 'PUT',
+            headers: {
+              Authorization: 'Bearer ' + data.accessToken,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              uris: ['spotify:track:' + segment.trackId],
+              position_ms: segment.trackStartMs ?? 0,
+            }),
+          }
+        );
+        if (!res.ok) {
+          const body = await res.text();
+          throw new Error('Spotify API ' + res.status + ': ' + body);
+        }
+        lastTrackIdRef.current = segment.trackId;
+        setSdkError('');
+
+        if (shouldFade) {
+          await fadeVolume(0, volume, 450);
+        } else if (playerRef.current) {
+          await playerRef.current.setVolume(volume);
+        }
+      } catch (err: any) {
+        setSdkError(err?.message || 'No se pudo reproducir la canción de este tramo.');
+        if (playerRef.current) await playerRef.current.setVolume(volume);
       }
-    );
-  }, [route]);
+    },
+    [volume, fadeVolume]
+  );
+
+  const handleSeek = useCallback(
+    (time: number, committed: boolean) => {
+      if (!route) return;
+      const clamped = Math.max(0, Math.min(route.totalDuration, time));
+      setCurrentTime(clamped);
+
+      if (!committed || !sdkReady || !deviceIdRef.current) return;
+
+      const targetSeg = getActiveSegment(route.segments, clamped);
+      if (!targetSeg?.trackId) return;
+
+      lastTrackIdRef.current = null; // force a (re)start even if we land back on the same track
+      void playSegmentTrack(targetSeg);
+      setIsPlaying(true);
+    },
+    [route, sdkReady, playSegmentTrack]
+  );
 
   // Tick every second to advance currentTime
   useEffect(() => {
@@ -166,15 +281,41 @@ export default function PlaybackPage() {
     return () => { if (tickRef.current) clearInterval(tickRef.current); };
   }, [isPlaying, route]);
 
-  const handlePlayPause = async () => {
-    if (!isPlaying && currentTime === 0) {
-      await startSpotifyPlaylist();
+  // Whenever the active segment's song changes while playing, switch to it
+  useEffect(() => {
+    if (!isPlaying || !route) return;
+    const seg = getActiveSegment(route.segments, currentTime);
+    if (seg?.trackId && seg.trackId !== lastTrackIdRef.current) {
+      void playSegmentTrack(seg, { fade: true });
     }
-    if (playerRef.current) {
-      await playerRef.current.togglePlay();
-    } else {
-      // No Spotify SDK — just advance time manually (demo mode)
+  }, [isPlaying, currentTime, route, playSegmentTrack]);
+
+  const hasTrackAssignments = !!route?.segments.some((s) => s.trackId);
+
+  const handlePlayPause = async () => {
+    if (!hasTrackAssignments || !playerRef.current) {
+      // No songs assigned or SDK unavailable — just advance time manually (demo mode)
       setIsPlaying((v) => !v);
+      return;
+    }
+
+    if (!sdkReady || !deviceIdRef.current) {
+      setSdkError('El reproductor de Spotify aún no está listo. Espera unos segundos e inténtalo de nuevo.');
+      return;
+    }
+
+    try {
+      if (lastTrackIdRef.current === null) {
+        // Nothing loaded on the device yet — start this segment's song
+        const seg = getActiveSegment(route!.segments, currentTime);
+        if (seg?.trackId) await playSegmentTrack(seg);
+      } else {
+        // Already loaded — just toggle play/pause
+        await playerRef.current.togglePlay();
+      }
+      setSdkError('');
+    } catch (err: any) {
+      setSdkError(err?.message || 'No se pudo iniciar la reproducción en Spotify.');
     }
   };
 
@@ -183,8 +324,10 @@ export default function PlaybackPage() {
     if (tickRef.current) clearInterval(tickRef.current);
   };
 
-  const handleNext = async () => {
-    if (playerRef.current) await playerRef.current.nextTrack();
+  const handleNext = () => {
+    if (!route) return;
+    const next = route.segments.find((s) => s.startTime > currentTime + 0.5);
+    if (next) handleSeek(next.startTime, true);
   };
 
   const handleVolumeChange = async (v: number) => {
@@ -205,6 +348,7 @@ export default function PlaybackPage() {
   const zoneColor = zone ? ZONE_COLORS[zone] : '#444';
   const segTimeRemaining = activeSeg ? Math.max(0, activeSeg.endTime - currentTime) : 0;
   const totalRemaining = route.totalDuration - currentTime;
+  const recoveryInfo = getRecoveryInfo(route.segments, currentTime);
 
   return (
     <div className="playback-page">
@@ -246,10 +390,16 @@ export default function PlaybackPage() {
             {formatTime(segTimeRemaining)}&nbsp;&nbsp;{activeSeg?.method || '—'}
           </div>
         </div>
-        {/* Time remaining */}
-        <div className="playback-header-cell">
-          <div className="phc-label">Descanso / Tiempo</div>
-          <div className="phc-time">{formatTime(totalRemaining)}</div>
+        {/* Recovery countdown, falls back to total time remaining */}
+        <div className="playback-header-cell" style={recoveryInfo?.inRecovery ? { background: '#1a3a1a' } : undefined}>
+          <div className="phc-label">
+            {recoveryInfo
+              ? (recoveryInfo.inRecovery ? 'Descansando' : 'Próximo descanso en')
+              : 'Tiempo restante'}
+          </div>
+          <div className="phc-time">
+            {formatTime(recoveryInfo ? recoveryInfo.seconds : totalRemaining)}
+          </div>
         </div>
       </div>
 
@@ -261,6 +411,8 @@ export default function PlaybackPage() {
           currentTime={currentTime}
           className="playback-canvas"
           height={window.innerHeight - 64 - 60}
+          interactive
+          onSeek={handleSeek}
         />
 
         {/* Now playing overlay */}
@@ -286,7 +438,7 @@ export default function PlaybackPage() {
 
       {/* Controls bar */}
       <div className="playback-controls">
-        <button className="btn-icon" onClick={() => { handleStop(); setCurrentTime(0); }}>⏮</button>
+        <button className="btn-icon" onClick={() => { handleStop(); setCurrentTime(0); lastTrackIdRef.current = null; }}>⏮</button>
         <button className="btn-icon btn-play" onClick={handlePlayPause}>
           {isPlaying ? '⏸' : '▶'}
         </button>
@@ -305,12 +457,22 @@ export default function PlaybackPage() {
         <span style={{ marginLeft: 16, fontSize: '0.9rem', color: '#888', fontVariantNumeric: 'tabular-nums' }}>
           {formatTime(currentTime)} / {formatTime(route.totalDuration)}
         </span>
-        {!route.playlistId && (
+        {!hasTrackAssignments && (
           <span style={{ marginLeft: 16, fontSize: '0.78rem', color: '#666' }}>
-            (Sin playlist asignada — modo demo)
+            (Sin canciones por tramo asignadas — modo demo)
+          </span>
+        )}
+        {hasTrackAssignments && !sdkReady && !sdkError && (
+          <span style={{ marginLeft: 16, fontSize: '0.78rem', color: '#666' }}>
+            Conectando con Spotify…
           </span>
         )}
       </div>
+      {sdkError && (
+        <div className="error-msg" style={{ margin: '0 1rem 0.75rem' }}>
+          {sdkError}
+        </div>
+      )}
     </div>
   );
 }

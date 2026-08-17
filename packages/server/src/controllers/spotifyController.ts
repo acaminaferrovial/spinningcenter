@@ -24,7 +24,7 @@ const SCOPES = [
   'playlist-read-collaborative',
 ].join(' ');
 
-export const spotifyLogin = (_req: Request, res: Response): void => {
+function buildSpotifyAuthorizeUrl(userId?: string): string {
   const clientId = process.env.SPOTIFY_CLIENT_ID!;
   const redirectUri = process.env.SPOTIFY_REDIRECT_URI!;
 
@@ -35,7 +35,15 @@ export const spotifyLogin = (_req: Request, res: Response): void => {
     redirect_uri: redirectUri,
   });
 
-  res.redirect(`${SPOTIFY_AUTH_URL}?${params.toString()}`);
+  if (userId) {
+    params.set('state', userId);
+  }
+
+  return `${SPOTIFY_AUTH_URL}?${params.toString()}`;
+}
+
+export const spotifyLogin = (_req: Request, res: Response): void => {
+  res.redirect(buildSpotifyAuthorizeUrl());
 };
 
 export const spotifyCallback = async (req: Request & { userId?: string }, res: Response): Promise<void> => {
@@ -88,19 +96,13 @@ export const spotifyCallback = async (req: Request & { userId?: string }, res: R
 };
 
 export const spotifyLoginWithState = (req: AuthRequest, res: Response): void => {
-  const clientId = process.env.SPOTIFY_CLIENT_ID!;
-  const redirectUri = process.env.SPOTIFY_REDIRECT_URI!;
   const userId = req.userId!;
 
-  const params = new URLSearchParams({
-    response_type: 'code',
-    client_id: clientId,
-    scope: SCOPES,
-    redirect_uri: redirectUri,
-    state: userId,
-  });
+  res.redirect(buildSpotifyAuthorizeUrl(userId));
+};
 
-  res.redirect(`${SPOTIFY_AUTH_URL}?${params.toString()}`);
+export const getSpotifyAuthorizeUrl = (req: AuthRequest, res: Response): void => {
+  res.json({ url: buildSpotifyAuthorizeUrl(req.userId) });
 };
 
 export const getPlaylists = async (req: AuthRequest, res: Response): Promise<void> => {

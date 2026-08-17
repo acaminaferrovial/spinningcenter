@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useCallback, useState } from 'react';
-import { Segment, ZONE_COLORS, intensityToZone } from '../types';
+import { Segment, ZONE_COLORS, METHOD_OPTIONS, intensityToZone } from '../types';
 
 interface Props {
   segments: Segment[];
@@ -17,10 +17,9 @@ const ZONE_BAND_COLORS = [
   '#c8d62b', '#90c030', '#5aad3c', '#3090a0', '#1a90d9', '#1060a0',
 ];
 
-const METHOD_OPTIONS = [
-  'Llano', 'Escalada sentado', 'Sprint', 'Escalada de pie',
-  'Fuerza', 'Recuperación', 'Intervalo', 'Velocidad',
-];
+const MIN_ZOOM = 1;
+const MAX_ZOOM = 20;
+const NICE_STEPS = [5, 10, 15, 30, 60, 120, 300, 600, 900, 1800];
 
 function yToIntensity(y: number, H: number): number {
   const chartH = H - PAD_TOP - PAD_BOTTOM;
@@ -28,9 +27,12 @@ function yToIntensity(y: number, H: number): number {
   return Math.min(10, Math.max(1, Math.round(raw)));
 }
 
-function xToTime(x: number, totalDuration: number, W: number): number {
+function xToTime(x: number, viewStart: number, visibleDuration: number, W: number): number {
   const chartW = W - PAD_LEFT - PAD_RIGHT;
-  return Math.max(0, Math.min(totalDuration, ((x - PAD_LEFT) / chartW) * totalDuration));
+  return Math.max(
+    viewStart,
+    Math.min(viewStart + visibleDuration, viewStart + ((x - PAD_LEFT) / chartW) * visibleDuration)
+  );
 }
 
 function intensityToY(intensity: number, H: number): number {
@@ -38,9 +40,13 @@ function intensityToY(intensity: number, H: number): number {
   return PAD_TOP + (chartH * (10 - intensity)) / 9;
 }
 
-function timeToX(time: number, totalDuration: number, W: number): number {
+function timeToX(time: number, viewStart: number, visibleDuration: number, W: number): number {
   const chartW = W - PAD_LEFT - PAD_RIGHT;
-  return PAD_LEFT + (chartW * time) / totalDuration;
+  return PAD_LEFT + (chartW * (time - viewStart)) / visibleDuration;
+}
+
+function clamp(v: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, v));
 }
 
 export default function SegmentEditor({ segments, totalDuration, onChange }: Props) {
@@ -48,7 +54,13 @@ export default function SegmentEditor({ segments, totalDuration, onChange }: Pro
   const [drawing, setDrawing] = useState(false);
   const [currentMethod, setCurrentMethod] = useState('Llano');
   const [currentCadence, setCurrentCadence] = useState(80);
+  const [preview, setPreview] = useState<{ startTime: number; endTime: number; intensity: number } | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [viewStart, setViewStart] = useState(0);
   const startRef = useRef<{ time: number; intensity: number } | null>(null);
+
+  const visibleDuration = totalDuration / zoom;
+  const clampedViewStart = clamp(viewStart, 0, Math.max(0, totalDuration - visibleDuration));
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -85,10 +97,12 @@ export default function SegmentEditor({ segments, totalDuration, onChange }: Pro
       ctx.setLineDash([]);
     });
 
-    // Draw segments
-    segments.forEach((seg) => {
-      const x0 = timeToX(seg.startTime, totalDuration, W);
-      const x1 = timeToX(seg.endTime, totalDuration, W);
+    // Draw segments (skip ones fully outside the visible window)
+    segments
+      .filter((seg) => seg.endTime > clampedViewStart && seg.startTime < clampedViewStart + visibleDuration)
+      .forEach((seg) => {
+      const x0 = timeToX(seg.startTime, clampedViewStart, visibleDuration, W);
+      const x1 = timeToX(seg.endTime, clampedViewStart, visibleDuration, W);
       const y = intensityToY(seg.intensity, H);
       const baselineY = H - PAD_BOTTOM;
 
@@ -121,19 +135,44 @@ export default function SegmentEditor({ segments, totalDuration, onChange }: Pro
       }
     });
 
-    // Time labels
+    // Live preview of the segment currently being drawn
+    if (preview) {
+      const x0 = timeToX(preview.startTime, clampedViewStart, visibleDuration, W);
+      const x1 = timeToX(preview.endTime, clampedViewStart, visibleDuration, W);
+      const y = intensityToY(preview.intensity, H);
+      const baselineY = H - PAD_BOTTOM;
+
+      ctx.beginPath();
+      ctx.moveTo(x0, baselineY);
+      ctx.lineTo(x0, y);
+      ctx.lineTo(x1, y);
+      ctx.lineTo(x1, baselineY);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(255,255,255,0.35)';
+      ctx.fill();
+
+      ctx.setLineDash([5, 4]);
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(Math.min(x0, x1), y, Math.abs(x1 - x0), baselineY - y);
+      ctx.setLineDash([]);
+    }
+
+    // Time labels — pick a "nice" step so we get a readable number of labels
+    // regardless of zoom level
     ctx.fillStyle = 'rgba(255,255,255,0.7)';
     ctx.font = '11px sans-serif';
     ctx.textAlign = 'center';
-    const numLabels = Math.min(8, Math.floor(totalDuration / 60));
-    for (let i = 0; i <= numLabels; i++) {
-      const t = (totalDuration * i) / numLabels;
-      const x = timeToX(t, totalDuration, W);
+    const rawStep = visibleDuration / 6;
+    const step = NICE_STEPS.find((s) => s >= rawStep) || NICE_STEPS[NICE_STEPS.length - 1];
+    const firstLabel = Math.ceil(clampedViewStart / step) * step;
+    for (let t = firstLabel; t <= clampedViewStart + visibleDuration; t += step) {
+      const x = timeToX(t, clampedViewStart, visibleDuration, W);
       const mins = Math.floor(t / 60);
       const secs = Math.floor(t % 60);
       ctx.fillText(`${mins}:${secs.toString().padStart(2, '0')}`, x, H - PAD_BOTTOM + 16);
     }
-  }, [segments, totalDuration]);
+  }, [segments, totalDuration, preview, clampedViewStart, visibleDuration]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -182,25 +221,45 @@ export default function SegmentEditor({ segments, totalDuration, onChange }: Pro
     const canvas = canvasRef.current!;
     const W = canvas.offsetWidth;
     const H = getLogicalH();
-    const time = xToTime(x, totalDuration, W);
+    const time = xToTime(x, clampedViewStart, visibleDuration, W);
     const intensity = yToIntensity(y, H);
     startRef.current = { time, intensity };
     setDrawing(true);
+    setPreview({ startTime: time, endTime: time, intensity });
+  };
+
+  const handlePointerMove = (e: React.MouseEvent | React.TouchEvent) => {
+    if (!drawing || !startRef.current) return;
+    const { x } = getPos(e);
+    const canvas = canvasRef.current!;
+    const W = canvas.offsetWidth;
+    const time = xToTime(x, clampedViewStart, visibleDuration, W);
+    const { time: startTime, intensity } = startRef.current;
+    setPreview({
+      startTime: Math.min(startTime, time),
+      endTime: Math.max(startTime, time),
+      intensity,
+    });
   };
 
   const handlePointerUp = (e: React.MouseEvent | React.TouchEvent) => {
-    if (!drawing || !startRef.current) return;
+    if (!drawing || !startRef.current) {
+      setPreview(null);
+      return;
+    }
     setDrawing(false);
+    setPreview(null);
 
     const { x } = getPos(e);
     const canvas = canvasRef.current!;
     const W = canvas.offsetWidth;
-    const endTime = xToTime(x, totalDuration, W);
+    const endTime = xToTime(x, clampedViewStart, visibleDuration, W);
     const { time: startTime, intensity } = startRef.current;
 
     const actualStart = Math.min(startTime, endTime);
     const actualEnd = Math.max(startTime, endTime);
-    if (actualEnd - actualStart < 5) return; // too short
+    startRef.current = null;
+    if (actualEnd - actualStart < 2) return; // too short — treat as a misclick, not a segment
 
     const zone = intensityToZone(intensity);
     const newSeg: Segment = {
@@ -215,8 +274,33 @@ export default function SegmentEditor({ segments, totalDuration, onChange }: Pro
     // Merge: remove overlapping segments or trim them
     const updated = mergeSegments(segments, newSeg, totalDuration);
     onChange(updated);
-    startRef.current = null;
   };
+
+  const handleWheel = (e: React.WheelEvent) => {
+    e.preventDefault();
+    const canvas = canvasRef.current!;
+    const rect = canvas.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const W = canvas.offsetWidth;
+
+    const cursorTime = xToTime(mouseX, clampedViewStart, visibleDuration, W);
+    const factor = e.deltaY < 0 ? 1.3 : 1 / 1.3;
+    const newZoom = clamp(zoom * factor, MIN_ZOOM, MAX_ZOOM);
+    const newVisibleDuration = totalDuration / newZoom;
+    const chartRatio = (mouseX - PAD_LEFT) / (W - PAD_LEFT - PAD_RIGHT);
+    const newViewStart = clamp(
+      cursorTime - chartRatio * newVisibleDuration,
+      0,
+      Math.max(0, totalDuration - newVisibleDuration)
+    );
+
+    setZoom(newZoom);
+    setViewStart(newViewStart);
+  };
+
+  const zoomIn = () => setZoom((z) => clamp(z * 1.5, MIN_ZOOM, MAX_ZOOM));
+  const zoomOut = () => setZoom((z) => clamp(z / 1.5, MIN_ZOOM, MAX_ZOOM));
+  const resetZoom = () => { setZoom(1); setViewStart(0); };
 
   return (
     <div>
@@ -243,24 +327,81 @@ export default function SegmentEditor({ segments, totalDuration, onChange }: Pro
         <button
           className="btn btn-secondary"
           style={{ padding: '0.35rem 0.75rem', fontSize: '0.85rem' }}
-          onClick={() => onChange([])}
+          onClick={() => onChange([{
+            startTime: 0,
+            endTime: totalDuration,
+            intensity: 5,
+            zone: intensityToZone(5),
+            method: 'Llano',
+            cadence: 80,
+          }])}
         >
           Limpiar todo
         </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 'auto' }}>
+          <button
+            className="btn btn-secondary"
+            style={{ padding: '0.35rem 0.6rem', fontSize: '0.85rem' }}
+            onClick={zoomOut}
+            disabled={zoom <= MIN_ZOOM}
+            title="Alejar"
+          >
+            −
+          </button>
+          <span style={{ fontSize: '0.78rem', color: '#888', minWidth: 40, textAlign: 'center' }}>
+            {zoom.toFixed(1)}×
+          </span>
+          <button
+            className="btn btn-secondary"
+            style={{ padding: '0.35rem 0.6rem', fontSize: '0.85rem' }}
+            onClick={zoomIn}
+            disabled={zoom >= MAX_ZOOM}
+            title="Acercar"
+          >
+            +
+          </button>
+          {zoom > MIN_ZOOM && (
+            <button
+              className="btn btn-secondary"
+              style={{ padding: '0.35rem 0.6rem', fontSize: '0.85rem' }}
+              onClick={resetZoom}
+              title="Restablecer zoom"
+            >
+              Reset
+            </button>
+          )}
+        </div>
       </div>
       <p style={{ fontSize: '0.78rem', color: '#888', marginBottom: '0.5rem' }}>
-        💡 Haz click y arrastra horizontalmente para dibujar un segmento de intensidad.
-        La posición vertical define la intensidad (1–10).
+        💡 Haz click y arrastra horizontalmente para pintar un tramo de intensidad — verás una vista previa
+        mientras arrastras. La posición vertical define la intensidad (1–10). El resto de la ruta ya viene
+        rellena por defecto, así que no quedan huecos en blanco. Usa la rueda del ratón sobre el canvas para
+        hacer zoom.
       </p>
       <canvas
         ref={canvasRef}
         className="designer-canvas"
-        style={{ height: '280px' }}
+        style={{ height: '280px', cursor: 'crosshair' }}
         onMouseDown={handlePointerDown}
+        onMouseMove={handlePointerMove}
         onMouseUp={handlePointerUp}
+        onMouseLeave={handlePointerUp}
+        onWheel={handleWheel}
         onTouchStart={handlePointerDown}
+        onTouchMove={handlePointerMove}
         onTouchEnd={handlePointerUp}
       />
+      {zoom > MIN_ZOOM && (
+        <input
+          type="range"
+          min={0}
+          max={Math.max(0, totalDuration - visibleDuration)}
+          step={1}
+          value={clampedViewStart}
+          onChange={(e) => setViewStart(Number(e.target.value))}
+          style={{ width: '100%', marginTop: '0.4rem' }}
+        />
+      )}
     </div>
   );
 }

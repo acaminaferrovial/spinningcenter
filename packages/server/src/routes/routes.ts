@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { authMiddleware } from '../middleware/auth';
+import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { asyncHandler } from '../middleware/asyncHandler';
 import { apiLimiter } from '../middleware/rateLimiter';
 import {
   getRoutes,
@@ -14,10 +15,10 @@ const router = Router();
 router.use(apiLimiter);
 router.use(authMiddleware);
 
-router.get('/', getRoutes);
-router.get('/:id', getRoute);
-router.post('/', createRoute);
-router.put('/:id', updateRoute);
-router.delete('/:id', deleteRoute);
+router.get('/', asyncHandler<AuthRequest>(getRoutes));
+router.get('/:id', asyncHandler<AuthRequest>(getRoute));
+router.post('/', asyncHandler<AuthRequest>(createRoute));
+router.put('/:id', asyncHandler<AuthRequest>(updateRoute));
+router.delete('/:id', asyncHandler<AuthRequest>(deleteRoute));
 
 export default router;

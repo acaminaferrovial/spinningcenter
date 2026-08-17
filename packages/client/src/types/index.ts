@@ -11,6 +11,13 @@ export interface Segment {
   zone: number;       // 1–5
   method: string;
   cadence?: number;
+  // Song assigned to this specific segment/region, if any
+  trackId?: string;
+  trackName?: string;
+  artist?: string;
+  image?: string;
+  trackDurationMs?: number;
+  trackStartMs?: number; // where in the song playback should start
 }
 
 export interface Route {
@@ -40,11 +47,10 @@ export interface SpotifyTrack {
   image?: string;
 }
 
-export interface TrackZoneMapping {
-  track: SpotifyTrack;
-  zones: number[];       // zone numbers covered
-  primaryZone: number;
-}
+export const METHOD_OPTIONS = [
+  'Llano', 'Escalada sentado', 'Sprint', 'Escalada de pie',
+  'Fuerza', 'Recuperación', 'Intervalo', 'Velocidad',
+];
 
 export const ZONE_COLORS: Record<number, string> = {
   1: '#1a90d9', // Blue

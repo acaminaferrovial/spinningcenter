@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { authMiddleware } from '../middleware/auth';
+import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { asyncHandler } from '../middleware/asyncHandler';
 import { apiLimiter } from '../middleware/rateLimiter';
 import {
   getPlaylists,
@@ -12,8 +13,8 @@ const router = Router();
 router.use(apiLimiter);
 router.use(authMiddleware);
 
-router.get('/token', getSpotifyToken);
-router.get('/playlists', getPlaylists);
-router.get('/playlists/:id/tracks', getPlaylistTracks);
+router.get('/token', asyncHandler<AuthRequest>(getSpotifyToken));
+router.get('/playlists', asyncHandler<AuthRequest>(getPlaylists));
+router.get('/playlists/:id/tracks', asyncHandler<AuthRequest>(getPlaylistTracks));
 
 export default router;

@@ -5,6 +5,7 @@ import BestCyclingChart from '../components/BestCyclingChart';
 import api from '../utils/api';
 import { Route } from '../types';
 import { useAuth } from '../context/AuthContext';
+import { startSpotifyConnect } from '../utils/spotify';
 
 function formatDuration(secs: number): string {
   const m = Math.floor(secs / 60);
@@ -44,7 +45,7 @@ export default function DashboardPage() {
         {user && !user.spotifyConnected && (
           <div className="spotify-banner">
             <p>🎵 Conecta tu cuenta de Spotify para usar playlists en tus rutas.</p>
-            <button className="btn btn-secondary" onClick={() => (window.location.href = '/api/auth/spotify')}>
+            <button className="btn btn-secondary" onClick={() => void startSpotifyConnect()}>
               Conectar Spotify
             </button>
           </div>

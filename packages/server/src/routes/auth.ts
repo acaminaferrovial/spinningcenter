@@ -1,15 +1,16 @@
 import { Router } from 'express';
-import { register, login, me } from '../controllers/authController';
-import { authMiddleware } from '../middleware/auth';
+import { login, me } from '../controllers/authController';
+import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { asyncHandler } from '../middleware/asyncHandler';
 import { authLimiter } from '../middleware/rateLimiter';
-import { spotifyLoginWithState, spotifyCallback } from '../controllers/spotifyController';
+import { spotifyLoginWithState, spotifyCallback, getSpotifyAuthorizeUrl } from '../controllers/spotifyController';
 
 const router = Router();
 
-router.post('/register', authLimiter, register);
-router.post('/login', authLimiter, login);
-router.get('/me', authLimiter, authMiddleware, me);
+router.post('/login', authLimiter, asyncHandler(login));
+router.get('/me', authLimiter, authMiddleware, asyncHandler<AuthRequest>(me));
+router.get('/spotify/url', authLimiter, authMiddleware, getSpotifyAuthorizeUrl);
 router.get('/spotify', authLimiter, authMiddleware, spotifyLoginWithState);
-router.get('/spotify/callback', authLimiter, spotifyCallback);
+router.get('/spotify/callback', authLimiter, asyncHandler(spotifyCallback));
 
 export default router;

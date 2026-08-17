@@ -7,6 +7,13 @@ export interface ISegment {
   zone: number;      // 1–5
   method: string;    // "Escalada sentado", "Sprint", etc.
   cadence?: number;  // RPM
+  // Song assigned to this specific segment/region, if any
+  trackId?: string;  // Spotify track ID
+  trackName?: string;
+  artist?: string;
+  image?: string;
+  trackDurationMs?: number;
+  trackStartMs?: number; // where in the song playback should start, in ms
 }
 
 export interface IRoute extends Document {
@@ -27,6 +34,12 @@ const SegmentSchema = new Schema<ISegment>({
   zone: { type: Number, required: true, min: 1, max: 5 },
   method: { type: String, required: true, default: 'Llano' },
   cadence: { type: Number },
+  trackId: { type: String },
+  trackName: { type: String },
+  artist: { type: String },
+  image: { type: String },
+  trackDurationMs: { type: Number },
+  trackStartMs: { type: Number },
 });
 
 const RouteSchema = new Schema<IRoute>(

@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "seed:admin": "ts-node-dev --transpile-only src/scripts/seedAdmin.ts"
   },
   "dependencies": {
     "axios": "^1.7.3",

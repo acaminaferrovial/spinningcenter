@@ -1,6 +1,7 @@
 import React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { startSpotifyConnect } from '../utils/spotify';
 
 export default function Topbar() {
   const { user, logout } = useAuth();
@@ -12,7 +13,7 @@ export default function Topbar() {
   };
 
   const handleSpotifyConnect = () => {
-    window.location.href = '/api/auth/spotify';
+    void startSpotifyConnect();
   };
 
   return (

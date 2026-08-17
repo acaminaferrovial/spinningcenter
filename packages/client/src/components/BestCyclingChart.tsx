@@ -8,7 +8,18 @@ interface Props {
   height?: number;
   width?: number;
   interactive?: boolean;
+  onSeek?: (time: number, committed: boolean) => void;
   className?: string;
+}
+
+const PAD_TOP = 10;
+const PAD_BOTTOM = 28;
+const PAD_LEFT = 48;
+const PAD_RIGHT = 12;
+
+function xToTime(x: number, totalDuration: number, width: number): number {
+  const chartW = width - PAD_LEFT - PAD_RIGHT;
+  return Math.max(0, Math.min(totalDuration, ((x - PAD_LEFT) / chartW) * totalDuration));
 }
 
 const ZONE_BAND_COLORS = [
@@ -45,9 +56,12 @@ export default function BestCyclingChart({
   currentTime,
   height = 300,
   width,
+  interactive = false,
+  onSeek,
   className = '',
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const seekingRef = useRef(false);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -163,6 +177,30 @@ export default function BestCyclingChart({
       }
     }
 
+    // ── Recovery segment markers (dashed vertical line at the start) ──────
+    segments
+      .filter((seg) => seg.method === 'Recuperación')
+      .forEach((seg) => {
+        const x = timeToX(seg.startTime, totalDuration, W, PAD_LEFT, PAD_RIGHT);
+        ctx.setLineDash([6, 5]);
+        ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x, PAD_TOP);
+        ctx.lineTo(x, baselineY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.font = '10px sans-serif';
+        const label = '😮‍💨 Descanso';
+        const labelWidth = ctx.measureText(label).width + 10;
+        ctx.fillRect(x + 3, PAD_TOP, labelWidth, 15);
+        ctx.fillStyle = '#fff';
+        ctx.textAlign = 'left';
+        ctx.fillText(label, x + 8, PAD_TOP + 11);
+      });
+
     // ── Time axis labels ───────────────────────────────────────────────────
     ctx.fillStyle = 'rgba(255,255,255,0.7)';
     ctx.font = '11px sans-serif';
@@ -238,11 +276,47 @@ export default function BestCyclingChart({
     draw();
   }, [draw, height]);
 
+  const emitSeek = useCallback(
+    (clientX: number, committed: boolean) => {
+      const canvas = canvasRef.current;
+      if (!canvas || !onSeek) return;
+      const rect = canvas.getBoundingClientRect();
+      const time = xToTime(clientX - rect.left, totalDuration, rect.width);
+      onSeek(time, committed);
+    },
+    [onSeek, totalDuration]
+  );
+
+  const handlePointerDown = (e: React.MouseEvent) => {
+    if (!interactive) return;
+    seekingRef.current = true;
+    emitSeek(e.clientX, false);
+  };
+
+  const handlePointerMove = (e: React.MouseEvent) => {
+    if (!interactive || !seekingRef.current) return;
+    emitSeek(e.clientX, false);
+  };
+
+  const handlePointerUp = (e: React.MouseEvent) => {
+    if (!interactive || !seekingRef.current) return;
+    seekingRef.current = false;
+    emitSeek(e.clientX, true);
+  };
+
   return (
     <canvas
       ref={canvasRef}
       className={className}
-      style={{ width: width ? width + 'px' : '100%', height: height + 'px' }}
+      style={{
+        width: width ? width + 'px' : '100%',
+        height: height + 'px',
+        cursor: interactive ? 'pointer' : 'default',
+      }}
+      onMouseDown={handlePointerDown}
+      onMouseMove={handlePointerMove}
+      onMouseUp={handlePointerUp}
+      onMouseLeave={handlePointerUp}
     />
   );
 }

@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: spinningcenter-api
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build --workspace=packages/server
+    startCommand: npm run start --workspace=packages/server
+    envVars:
+      - key: JWT_EXPIRES
+        value: 7d
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: SPOTIFY_CLIENT_ID
+        sync: false
+      - key: SPOTIFY_CLIENT_SECRET
+        sync: false
+      - key: SPOTIFY_REDIRECT_URI
+        sync: false
+      - key: CLIENT_URL
+        sync: false
